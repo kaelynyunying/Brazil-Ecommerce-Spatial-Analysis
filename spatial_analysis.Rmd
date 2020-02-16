@@ -378,7 +378,7 @@ As shown, the number of least connected regions and most connected regions are t
 plot(map, border="lightgrey")
 plot(knb, coordinates(map), pch = 19, cex = 0.6, add = TRUE, col = "red")
 ```
-As the spatial distribution of the districts are evenly distributed, it shows that the adpative proximity matrix is the most suitable one for this assignment. 
+As the spatial distribution of the districts are evenly distributed, it shows that the adpative proximity matrix is the most suitable one. 
 
 II. COMPUTE CALCULATE THE LOCAL SPATIAL CLUSTERING STATISTICS AND TO INTERPRET THEIR ANALYSIS RESULTS 
 
@@ -515,7 +515,7 @@ As shown, the number of least connected regions and most connected regions are t
 plot(map, border="lightgrey")
 plot(knbsale, coordinates(map), pch = 19, cex = 0.6, add = TRUE, col = "red")
 ```
-As the spatial distribution of the districts are evenly distributed, it shows that the adpative proximity matrix is the most suitable one for this assignment. 
+As the spatial distribution of the districts are evenly distributed, it shows that the adpative proximity matrix is the most suitable one. 
 
 II. COMPUTE CALCULATE THE LOCAL SPATIAL CLUSTERING STATISTICS AND TO INTERPRET THEIR ANALYSIS RESULTS 
 
@@ -650,7 +650,7 @@ As shown, the number of least connected regions and most connected regions are t
 plot(map, border="lightgrey")
 plot(knbfreight, coordinates(map), pch = 19, cex = 0.6, add = TRUE, col = "red")
 ```
-As the spatial distribution of the districts are evenly distributed, it shows that the adpative proximity matrix is the most suitable one for this assignment. 
+As the spatial distribution of the districts are evenly distributed, it shows that the adpative proximity matrix is the most suitable one. 
 
 II. COMPUTE CALCULATE THE LOCAL SPATIAL CLUSTERING STATISTICS AND TO INTERPRET THEIR ANALYSIS RESULTS 
 
@@ -782,7 +782,7 @@ As shown, the number of least connected regions and most connected regions are t
 plot(map, border="lightgrey")
 plot(knbsalesavg, coordinates(map), pch = 19, cex = 0.6, add = TRUE, col = "red")
 ```
-As the spatial distribution of the districts are evenly distributed, it shows that the adpative proximity matrix is the most suitable one for this assignment. 
+As the spatial distribution of the districts are evenly distributed, it shows that the adpative proximity matrix is the most suitable one.
 
 II. COMPUTE CALCULATE THE LOCAL SPATIAL CLUSTERING STATISTICS AND TO INTERPRET THEIR ANALYSIS RESULTS 
 
@@ -915,7 +915,7 @@ As shown, the number of least connected regions and most connected regions are t
 plot(map, border="lightgrey")
 plot(knbfreightavg, coordinates(map), pch = 19, cex = 0.6, add = TRUE, col = "red")
 ```
-As the spatial distribution of the districts are evenly distributed, it shows that the adpative proximity matrix is the most suitable one for this assignment. 
+As the spatial distribution of the districts are evenly distributed, it shows that the adpative proximity matrix is the most suitable one.
 
 II. COMPUTE CALCULATE THE LOCAL SPATIAL CLUSTERING STATISTICS AND TO INTERPRET THEIR ANALYSIS RESULTS 
 
