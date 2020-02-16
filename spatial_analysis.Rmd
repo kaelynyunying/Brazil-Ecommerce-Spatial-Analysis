@@ -1,0 +1,1029 @@
+---
+title: "Spatial Clustering of Geographically Referenced Attributes: Brazilian E-Commerce Case"
+author: "Zhuo Yunying Kaelyn"
+output:
+  word_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+#knitr::opts_chunk$set(echo=FALSE, eval=TRUE, message=FALSE, warning=FALSE)
+```
+A. SPATIAL AND ASPATIAL DATA CLEANING AND WRAGLLING 
+
+#Installing and loading R packages
+
+```{r echo=FALSE, eval=TRUE, message=FALSE, warning=FALSE}
+packages = c( 'tidyverse','sf', 'spdep', 'tmap','rgdal','dplyr')
+  for (p in packages){
+    if(!require(p, character.only = T)){
+      install.packages(p)
+    }
+    library(p,character.only = T)
+  }
+```
+
+#Importing aspatial data into R environment
+
+The csv files will be import using read_csv function of readr package. Only useful datasets are imported. In this case, order reviews dataset, order_payment dataset, product dataset, seller dataset and category dataset are removed as they are not necessary. 
+
+```{r echo=FALSE, eval=TRUE, message=FALSE, warning=FALSE}
+customers_dataset <- read_csv("data/aspatial/olist_customers_dataset.csv")
+
+geolocation_dataset <- read_csv("data/aspatial/olist_geolocation_dataset.csv")
+
+order_items_dataset <- read_csv("data/aspatial/olist_order_items_dataset.csv")
+
+orders_dataset <- read_csv("data/aspatial/olist_orders_dataset.csv")
+
+```
+
+#Importing geospatial data into R environment 
+
+The Region Metropolitana de Sao Paulo (RMSP) GIS data is in ESRI shapefile format. It will be imported into R environment by using the st_read() function of sf. 
+
+Based on research, EPSG:5880 is used to compute the projected coordinate system due to the fact that the accuracy level is the most precise one at 1.0. Meanshile this projected coordinate system is useful for area Brazil - onshore and offshore. Includes Rocas, Fernando de Noronha archipelago, Trindade, Ihlas Martim Vaz and Sao Pedro e Sao Paulo. The projected coordinate system can be referenced from this link. https://epsg.io/5880
+
+Importing Data and Preparation
+```{r echo=FALSE, eval=TRUE, message=FALSE, warning=FALSE}
+RMSP_sf <- st_read(dsn = "data/spatial", 
+                   layer="RMSP_adm3")
+```
+
+Checking the RMSP Dataframe
+```{r}
+summary(RMSP_sf)
+head(RMSP_sf, n=4)
+RMSP_sf$ID_3 <- as.factor(RMSP_sf$ID_3)
+str(RMSP_sf)
+```
+
+#Change the CRS of RMSP SF to 5880
+
+```{r}
+RMSP_sf_final <- st_transform(RMSP_sf, 5880)
+st_crs(RMSP_sf_final)
+head(RMSP_sf_final, n=4)
+```
+
+```{r}
+head(geolocation_dataset, n=50)
+```
+
+
+#Create filtered_location from geolocation_dataset(only need 3 variables) convert it to spatial coordinate to 4361. 
+```{r}
+filtered_location <- geolocation_dataset %>%
+  select("geolocation_zip_code_prefix","geolocation_lat","geolocation_lng")
+
+#as there are multiple geolocation_lat and geolocation_lng with the same zip code prefix, we use mean to calculate the average values
+filtered_location <- aggregate(.~geolocation_zip_code_prefix, filtered_location, FUN = mean)
+
+#Convert the filtered location to sf spatial dataframe and set the CRS to 5880 subsequently
+filtered_location_sf <- st_as_sf(filtered_location, coords = c("geolocation_lng","geolocation_lat"), crs=4326) %>%
+  st_transform(crs=5880)
+```
+
+```{r}
+head(filtered_location_sf, n=4)
+```
+
+```{r}
+st_crs(filtered_location_sf)
+class(filtered_location_sf)
+head(filtered_location_sf, n=4)
+#RMSP_sf_final <- st_as_sf(RMSP_sf_final)
+#st_crs(RMSP_sf_final)
+```
+
+#merge filterted location dataset with the RMSP dataset
+```{r}
+final_filtered_location <- st_join(RMSP_sf_final, filtered_location_sf, join= st_intersects)
+summary(final_filtered_location)
+
+#final_filtered_location_group <- final_filtered_location %>% group_by(geolocation_zip_code_prefix) %>%
+ # summarise(district_id = sample(ID_3, 1), district_name = sample(NAME_3,1), geometry =sample(geometry,1))
+
+
+final_filtered_location_group = subset(final_filtered_location, select = c("ID_2","NAME_2","ID_3", "NAME_3", "geolocation_zip_code_prefix", "geometry" ))
+
+final_filtered_location_group <- na.omit(final_filtered_location_group, cols="geolocation_zip_code_prefix")
+
+str(final_filtered_location_group)
+```
+
+#Merge the customers dataset with the filtered_loation dataset and convert the coordinate of the customer)location table to 5880 
+```{r echo=FALSE, eval=TRUE, message=FALSE, warning=FALSE}
+
+customers_geolocation_dataset <- inner_join(final_filtered_location_group, customers_dataset, by = c("geolocation_zip_code_prefix"="customer_zip_code_prefix"))
+
+#customers_geolocation_dataset.sf <- st_as_sf(customers_geolocation_dataset, sf_column_name = "geometry", crs=5880)
+
+```
+
+```{r}
+st_crs(customers_geolocation_dataset)
+```
+
+#Get 2017 transaction data based on orders_dataset
+order_delivered_customer_date is used to reference as we would only like to reference those that are actually delivered to customers in 2017.
+
+```{r echo=FALSE, eval=TRUE, message=FALSE, warning=FALSE}
+orders_dataset_2017 <- orders_dataset %>%
+  filter(order_delivered_customer_date >= as.POSIXct('2017-01-01 00:00:00') &  order_delivered_customer_date < as.POSIXct('2018-01-01 00:00:00')) %>%
+  select(order_id, customer_id,order_delivered_customer_date)
+
+orders_dataset_2017
+
+```
+
+#Calculate the total ordersales value and total freight value given the order ID 
+
+```{r echo=FALSE, eval=TRUE, message=FALSE, warning=FALSE}
+colnames(order_items_dataset)
+```
+
+```{r}
+#Calculate the frequency for each order id to obtain the number of items purchased
+order_items_datasetV2 <- 
+  order_items_dataset %>%
+  group_by(order_id) %>%
+  tally()
+
+#Filter out order_item_id = 1 for original order_items_dataset
+order_items_datasetV3 <- order_items_dataset %>%
+  filter(order_item_id == 1)
+
+#Merge new v2 dataset via left_join with v3
+order_items_datasetV4 <-left_join(order_items_datasetV2, order_items_datasetV3, by =c("order_id" = "order_id"))
+
+#Create new column Total Sale
+order_items_datasetV4$Total_Sale <- order_items_datasetV4$price * order_items_datasetV4$n
+
+#Create new column Total Freight Value
+order_items_datasetV4$Total_Freight_Value <- order_items_datasetV4$freight_value * order_items_datasetV4$n
+
+#Keep selected columns
+order_items_datasetV5 <- order_items_datasetV4 %>% select(order_id,Total_Sale,Total_Freight_Value)
+```
+
+#Filter out order ID that has completed the devilvery in 2017
+```{r echo=FALSE, eval=TRUE, message=FALSE, warning=FALSE}
+order_items_dataset_2017<-inner_join(orders_dataset_2017,order_items_datasetV5, by = c("order_id"="order_id"))
+```
+
+#Filter out 2017 customer that are in the spatial boundary 
+We assume that for each unique customer, their address stay the same no matter what. 
+```{r echo=FALSE, eval=TRUE, message=FALSE, warning=FALSE}
+#innermerge with customers dataset
+order_items_location_2017 <- inner_join(order_items_dataset_2017, customers_geolocation_dataset, by = c("customer_id"="customer_id"))
+```
+
+```{r}
+head(order_items_location_2017, n=4)
+summary(order_items_location_2017)
+str(order_items_location_2017)
+
+```
+
+#Finally compile and consolidate the final dataframe
+
+```{r}
+finalcombine <- order_items_location_2017 %>% group_by(ID_3,NAME_3) %>%
+  summarise(total_transaction_number = n(),
+            final_total_sale = sum(Total_Sale),
+            final_total_freight = sum(Total_Freight_Value),
+            average_sales_per_transaction = final_total_sale/total_transaction_number,
+            average_freight_values_per_transaction = final_total_freight/total_transaction_number,
+            geometry = sample(geometry,1))
+```
+
+
+B. COMPUTE DIFFERENT SPATIAL WEIGHT MATRIX (USE LOCAL INSTEAD OF GLOBAL) TO UNDERSTAND THEIR USAGE
+. compute spatial weights using appropriate R functions,
+. plot Moran scatterplot,
+. calculate spatial autocorrelation statistics using appropriate functions of spdep package, and
+. compute and plot spatial correlogram using appropriate function of spdep package.
+
+```{r}
+#Import Shapefile into R Environment 
+map <- readOGR(dsn = "data/spatial", layer = "RMSP_adm3")
+```
+
+```{r}
+#Performing relational join
+map@data <- left_join(map@data,finalcombine)
+```
+
+```{r}
+#Convert Columns with NA to 0 Values
+map@data$total_transaction_number[is.na(map@data$total_transaction_number)] <- 0
+map@data$final_total_sale[is.na(map@data$final_total_sale)] <- 0
+map@data$final_total_freight[is.na(map@data$final_total_freight)] <- 0
+map@data$average_sales_per_transaction[is.na(map@data$average_sales_per_transaction)] <- 0
+map@data$average_freight_values_per_transaction[is.na(map@data$average_freight_values_per_transaction)] <- 0
+```
+
+To identify the appropriate spatial weight matrix and local spatial clustirng, we will first use total transaction number to explore in order to set the benchmark for the rest. This is because total transaction number will directly and indirectly influence the rest of 3 attributes. Subsequently, we will adopt the same method to plot the necessary geovisualization for the rest. 
+
+#(A) Transaction Number
+
+I. Modelling Spatial Neighbours 
+
+#Chloropleth Map to Show Distribution of Total Transaction Number
+```{r}
+qtm(map,"total_transaction_number", text="ID_3", text.size = 0.5)
+```
+
+From the exploratory data analysis using Choloropleth Map, We notice that the spatial distribution by total transaction number is not random. More transactions occur in the central area of the map while the transactions decrease gradually as the distance from the centre increases. 
+
+
+#Method 1: Creating Contiguity Spatial Weights 
+
+Creating (QUEEN) contiguity based neighbours 
+```{r}
+wm_q <- poly2nb(map, queen=TRUE)
+summary(wm_q)
+```
+
+The summary report above shows that there are 160 area units in Hunan. The most connect area unit has 15 neighbours (for 41 area units). There are 21 area units with only one heighbours.There are quite a substantial (41) regions that has very high connectivity which reduce the effectiveness of this spatial weight matrix measurement.  
+
+Plotting Queen Contiguity based Neighbours Maps 
+```{r}
+plot(map, border="lightgrey")
+plot(wm_q, coordinates(map), pch = 19, cex = 0.6, add = TRUE, col= "red")
+```
+
+As we have observed the distribution is not even throughout the city as the connected lines are more prevelant in the central area. Queen Contiguity Based Neighbours Maps are not an ideal spatail weight matrix.
+
+Creating (ROOK) contiguity based neighbours 
+```{r}
+wm_r <- poly2nb(map, queen=FALSE)
+summary(wm_r)
+```
+The summary report above shows that there are 160 area units in Hunan. The most connect area unit has 13 neighbours (41 of them). There are 21 area units with only one heighbours. There are quite a substantial (41) regions that has very high connectivity which reduce the effectiveness of this spatial weight matrix measurement.
+
+Plotting Rook Contiguity Based Neighbours Maps 
+```{r}
+plot(map, border="lightgrey")
+plot(wm_r, coordinates(map), pch = 19, cex = 0.6, add = TRUE, col = "red")
+```
+
+Similar observations as QUEEN are observed for Rook Contiguity Based Neighbours Map, hence this weight matrix method is also not suitable.
+
+#Method 2: Computing Distance Based Neighbours
+Next, we will exlore the distane based neighbors method to check whether it is suitable for use this for the spatial weight matrix. A different k values is generated to compare the difference. 
+```{r}
+coords <- coordinates(map)
+wm_knn1 <- knn2nb(knearneigh(coords, k=1), row.names=row.names(map$total_transaction_number))
+wm_knn2 <- knn2nb(knearneigh(coords, k=2), row.names=row.names(map$total_transaction_number))
+wm_knn4 <- knn2nb(knearneigh(coords, k=4), row.names=row.names(map$total_transaction_number))
+```
+
+Plotting Distance Based Neighbours 
+```{r}
+plot(map, border="lightgrey")
+plot(wm_knn1, coordinates(map), pch = 19, cex = 0.6, add = TRUE, col = "red")
+```
+
+Plotting Distance Based Neighbours 
+```{r}
+plot(map, border="lightgrey")
+plot(wm_knn2, coordinates(map), pch = 19, cex = 0.6, add = TRUE, col = "red")
+```
+
+Plotting Distance Based Neighbours 
+```{r}
+plot(map, border="lightgrey")
+plot(wm_knn4, coordinates(map), pch = 19, cex = 0.6, add = TRUE, col = "red")
+```
+Based on what has been shown, as k increases, the spatial distribution is more evenly spread out. However, majority of the links are still concentrated at the centre of the map and hence this method is not appropriate. 
+
+Next, we will explore Weights based on Inverse Distance Matrics.
+```{r}
+dist <- nbdists(wm_q, coordinates(map))
+idw <- lapply(dist, function(x) 1/(x/1000))
+
+```
+
+```{r}
+idw_q <- nb2listw(wm_q, glist=idw, style="B", zero.policy=TRUE)
+summary(unlist(idw_q$weights))
+summary(idw_q)
+```
+The summary report above shows that there are 160 area units. The most connect area unit has 15 neighbours (41 of them). There are 21 area units with only one heighbour (21 of them). There are quite a substantial (41) regions that has very high connectivity which reduce the effectiveness of this spatial weight matrix measurement. Even when IDW is used, the issue with overcentration in the middle does not improved hence iDW is not effective. 
+
+
+```{r}
+plot(map, border="lightgrey")
+plot(idw_q, coordinates(map), pch = 19, cex = 0.6, add = TRUE, col = "red")
+```
+As we have observed the distribution is not even throughout the city as the connected lines are more prevelant in the central area. Inverse Distance Matrics are not an ideal spatail weight matrix.
+
+As seen earlier for the past spatial matrix method, the distribution of features are potentialy biased as central districts are closer to each other than those that are away from city centre. As the features have unequal number of neighbors, we will row standardize the spatial weights (both QUEEN and ROOK contiguity condition) to check if there are any improvement to the spatial matrix. 
+
+Row Standadised eight Matrix on QUEEN
+```{r}
+rswm_q <- nb2listw(wm_q, style="W", zero.policy = TRUE)
+summary(rswm_q)
+```
+ 
+```{r}
+plot(map, border="lightgrey")
+plot(rswm_q, coordinates(map), pch = 19, cex = 0.6, add = TRUE, col = "red")
+```
+No sigificant change in the least connected region and most connected region and the spatial distribution for Queen Contiguity based Neighbours Maps.
+
+
+Row Standadised eight Matrix on ROOK
+```{r}
+rswm_r <- nb2listw(wm_r, style="W", zero.policy = TRUE)
+summary(rswm_r)
+```
+```{r}
+plot(map, border="lightgrey")
+plot(rswm_r, coordinates(map), pch = 19, cex = 0.6, add = TRUE, col = "red")
+```
+No sigificant change in the least connected region and most connected region and the spatial distribution for ROOK contiguity based neighbours. 
+
+
+Row Standadised eight Matrix on Distance Based Neighbours
+
+```{r}
+rswm_knn4 <- nb2listw(wm_knn4, style="W", zero.policy = TRUE)
+summary(rswm_knn4)
+```
+```{r}
+plot(map, border="lightgrey")
+plot(rswm_knn4, coordinates(map), pch = 19, cex = 0.6, add = TRUE, col = "red")
+```
+No sigificant change in the least connected region and most connected region and the spatial distribution for Distance Based Neighbours.
+
+Hence, row standirsed weight matrix is not ideal as it could produce large estimate variance where data are sparse (further away from city centre) while it could also mask subtle local variations where data are dense. Row Standadised weight Matrix will not be computed on Inverse Distance Matrics as they are not compatible. 
+
+As the transaction number mostly concentrates in the middle of the map, adaptive Proximity Matrix should be used as it take into account of the difference in density of the spatial points and consider adjustable bandwidth for the distance measure of dense and sparse data. This is due to the fact that it uses a fixed number of neighbours to derive the proximity matrix. 
+
+#Last Method: Adaptive Proximity Matrix
+```{r}
+coords <- coordinates(map)
+knb <- knn2nb(knearneigh(coords, k=8, longlat = TRUE),
+row.names=row.names(map$total_transaction_number))
+knb_lw <- nb2listw(knb, style = 'B')
+summary(knb_lw)
+
+```
+As shown, the number of least connected regions and most connected regions are the same (which is the total number of districts 160). This shows that every district is equally connected with any other districts, thus reducing the unfairness in spatial clustering due to the difference in distance to neighbours. 
+
+```{r}
+plot(map, border="lightgrey")
+plot(knb, coordinates(map), pch = 19, cex = 0.6, add = TRUE, col = "red")
+```
+As the spatial distribution of the districts are evenly distributed, it shows that the adpative proximity matrix is the most suitable one for this assignment. 
+
+II. COMPUTE CALCULATE THE LOCAL SPATIAL CLUSTERING STATISTICS AND TO INTERPRET THEIR ANALYSIS RESULTS 
+
+#Cluster and Outlier Analysis 
+1. Computing Local Moran's I using Adaptive Promoxity Weight Matrix
+
+```{r}
+fips <- order(map$NAME_3)
+localMI <- localmoran(map$total_transaction_number, knb_lw)
+head(localMI)
+```
+
+```{r}
+printCoefmat(data.frame(localMI[fips,], row.names=map$NAME_3[fips]),
+check.names=FALSE)
+```
+
+2. Plotting Local Moran Scatterplot 
+```{r}
+nci <- moran.plot(map$total_transaction_number, knb_lw, labels=as.character(map$NAME_3),
+xlab="Total Transaction Number", ylab="Spatially Lag Total Transaction Number")
+```
+
+As shown in this scatterplot, majority of the districts lie in the Low Low and High High quardrant. For instance Itaim Bibi, Jabaquara and Vila Mariaria fall in the region of HH Autocorrelation (i.e. positive cluster), meaning that these districts have as high number of transactions as the neighbours. However, there are some exceptions, for districts Guarulhos and Osasco, they are considered HL Autocorrelation (i.e. negative outlier), indicating that they have exceptionally higher number of transactions than the neighours. For the LH Autocorrelation (i.e. negative outlier), districts such as Morumbi has a lower number of transactions than the neighbours. 
+
+3. Mapping Local Moran's I
+
+```{r}
+#Append the local Moran's I dataframe onto hunan SpatialPOlygon DataFrame
+map.localMI <- cbind(map,localMI)
+```
+
+Mapping both local Moran's I values and P-values 
+
+```{r}
+localMI.map <- tm_shape(map.localMI) +
+  tm_fill(col = "Ii",
+          style = "pretty",
+          title = "local moran statistics") +
+  tm_borders(alpha = 0.5)
+
+pvalue.map <- tm_shape(map.localMI) +
+  tm_fill(col = "Pr.z...0.",
+          breaks=c(-Inf, 0.001, 0.01, 0.05, 0.1, Inf),
+          palette="-Blues",
+          title = "local Moran's I p-vaiues") +
+  tm_borders(alpha = 0.5)
+
+tmap_arrange(localMI.map, pvalue.map, asp=1, ncol=2)
+```
+
+We will safely use 0.05 as the pvalue (95% confidence intervals) to judge the statistical significance. As shown on the Local Moran's I p-values map on the right, darker blue shade indicated that the districts (cluster or outlier) are considered statistically siginificant.If the pvlaue <0.5, we can reject the randomness hypothesis of the spatial pattern. 
+
+For local moran statistics(left graph), a positive local moran stats shows that it is a positive cluster (i.e. either HH or LL Autocorrelation) while a negative local moran stats shows that it is a negative outlier (i.e. either HL or LW Autocorrelation). As observed, only positive clusters are statistically significant in this case (having a pvalues below 0.05). 
+
+5. Plotting LISA map 
+
+```{r}
+quadrant <- vector(mode="numeric",length=nrow(localMI))
+DV <- map$total_transaction_number - mean(map$total_transaction_number)
+C_mI <- localMI[,1] - mean(localMI[,1])
+signif <- 0.05
+quadrant[DV >0 & C_mI>0] <- 4
+quadrant[DV <0 & C_mI<0] <- 1
+quadrant[DV <0 & C_mI>0] <- 2
+quadrant[DV >0 & C_mI<0] <- 3
+quadrant[localMI[,5]>signif] <- 0
+
+```
+
+```{r}
+map.localMI$quadrant <- quadrant
+colors <- c("#ffffff", "#2c7bb6", "#abd9e9", "#fdae61", "#d7191c")
+clusters <- c("insignificant", "low-low", "low-high", "high-low", "highhigh")
+
+tm_shape(map.localMI) +
+  tm_fill(col = "quadrant", style = "cat", palette =
+colors[c(sort(unique(quadrant)))+1], labels =
+clusters[c(sort(unique(quadrant)))+1], popup.vars = c("Postal.Code")) +
+  tm_view(set.zoom.limits = c(11,17)) +
+  tm_borders(alpha=0.5)
+```
+
+THe LISA Cluster Map shows the significant locations color coded by type of spatial autocorrelation. the blue colour shaded districts are those having low-high autocorrelation, meaning that they are negative outliers that has lower values for total transaction number than the neighbours. For the high high regions, they are centrred in near the central area. 
+
+#Hot Spot and Cold Spot Area Analysis 
+
+Getis and Ord's G-statistics will be used to detect spatial anomalies. 
+
+
+1. Computing Gi Statistics using Adaptive Distance Weight Matrix
+```{r}
+fips <- order(map$NAME_3)
+gi.adaptive <- localG(map$total_transaction_number, knb_lw)
+map.gi <- cbind(map, as.matrix(gi.adaptive))
+names(map.gi)[22] <- "gstat_adaptive"
+```
+
+2. Visualising local Gi
+```{r}
+tm_shape(map.gi) +
+  tm_fill(col = "gstat_adaptive",
+          style = "pretty",
+          palette = "-RdBu",
+          title = "local Gi") +
+  tm_borders(alpha = 0.5)
+```
+
+Hot spots means that these region has higher values in total transaction number relative to the surroundings and vice versa for cold spots. In the choropleth map above, districts in red shade are signigicant and postive hot spot areas while countries shaded in blue  are significant and negative cold spot areas. This clearly shows that a large majority (away from centre) face lower transaction numbers (cold spots) than the neighbours while the hot spot areas are centered very close to the city centre. 
+
+#(B) Total Sales Values 
+
+I. Modelling Spatial Neighbours 
+#Chloropleth Map to Show Distribution of Total Sales Values
+```{r}
+qtm(map,"final_total_sale", text="ID_3", text.size = 0.5)
+```
+
+From the exploratory data analysis using Choloropleth Map, We notice that the spatial distribution by total sales values is not random. More sales are generated in the central area of the map while the sales values decrease gradually as the distance from the centre increases. 
+
+
+
+# Adaptive Proximity Matrix
+```{r}
+coords <- coordinates(map)
+knbsale <- knn2nb(knearneigh(coords, k=8, longlat = TRUE),
+row.names=row.names(map$final_total_sale))
+knbsale_lw <- nb2listw(knbsale, style = 'B')
+summary(knbsale_lw)
+```
+As shown, the number of least connected regions and most connected regions are the same (which is the total number of districts 160). This shows that every district is equally connected with any other districts, thus reducing the unfairness in spatial clustering due to the difference in distance to neighbours. 
+
+```{r}
+plot(map, border="lightgrey")
+plot(knbsale, coordinates(map), pch = 19, cex = 0.6, add = TRUE, col = "red")
+```
+As the spatial distribution of the districts are evenly distributed, it shows that the adpative proximity matrix is the most suitable one for this assignment. 
+
+II. COMPUTE CALCULATE THE LOCAL SPATIAL CLUSTERING STATISTICS AND TO INTERPRET THEIR ANALYSIS RESULTS 
+
+#Cluster and Outlier Analysis 
+1. Computing Local Moran's I using Adaptive Promoxity Weight Matrix
+
+```{r}
+fips <- order(map$NAME_3)
+localMIsale <- localmoran(map$final_total_sale, knbsale_lw)
+head(localMIsale)
+```
+
+```{r}
+printCoefmat(data.frame(localMIsale[fips,], row.names=map$NAME_3[fips]),
+check.names=FALSE)
+```
+
+2. Plotting Local Moran Scatterplot 
+```{r}
+nci <- moran.plot(map$final_total_sale, knbsale_lw, labels=as.character(map$NAME_3),
+xlab="Total Sales Values", ylab="Spatially Lag Total Sales Values")
+```
+
+As shown in this scatterplot, majority of the districts lie in the Low Low and High High quardrant.However, it is much more spread out than the distribution by total transaction number. In this case, Itaim Bibi, Vila Mariana, Jardim Paulista and Moema fall in the region of HH Autocorrelation (i.e. positive cluster), meaning that these districts have as high number of transactions as the neighbours. However, there are some exceptions, for districts Guarulhos and Osasco (similar to total transaction number), they are considered HL Autocorrelation (i.e. negative outlier), indicating that they have exceptionally higher number of transactions than the neighours. For the LH Autocorrelation (i.e. negative outlier), districts such as Morumbi has a lower number of transactions than the neighbours. 
+
+3. Mapping Local Moran's I
+
+```{r}
+#Append the local Moran's I dataframe onto hunan SpatialPOlygon DataFrame
+map.localMIsale <- cbind(map,localMIsale)
+```
+
+Mapping both local Moran's I values and P-values 
+
+```{r}
+localMIsale.map <- tm_shape(map.localMIsale) +
+  tm_fill(col = "Ii",
+          style = "pretty",
+          title = "local moran statistics") +
+  tm_borders(alpha = 0.5)
+
+pvalue.map <- tm_shape(map.localMIsale) +
+  tm_fill(col = "Pr.z...0.",
+          breaks=c(-Inf, 0.001, 0.01, 0.05, 0.1, Inf),
+          palette="-Blues",
+          title = "local Moran's I p-vaiues") +
+  tm_borders(alpha = 0.5)
+
+tmap_arrange(localMIsale.map, pvalue.map, asp=1, ncol=2)
+```
+
+We will safely use 0.05 as the pvalue (95% confidence intervals) to judge the statistical significance. As shown on the Local Moran's I p-values map on the right, darker blue shade indicated that the districts (cluster or outlier) are considered statistically siginificant.If the pvlaue <0.5, we can reject the randomness hypothesis of the spatial pattern. 
+
+For local moran statistics(left graph), a positive local moran stats shows that it is a positive cluster (i.e. either HH or LL Autocorrelation) while a negative local moran stats shows that it is a negative outlier (i.e. either HL or LW Autocorrelation). For those that are considered siginicant, majority of these regions are under clusters. However, for those that are considerd outlier (orange and dark orange), none of them are statistically significant.
+
+5. Plotting LISA map 
+
+```{r}
+quadrant <- vector(mode="numeric",length=nrow(localMIsale))
+DV <- map$final_total_sale - mean(map$final_total_sale)
+C_mI <- localMIsale[,1] - mean(localMIsale[,1])
+signif <- 0.05
+quadrant[DV >0 & C_mI>0] <- 4
+quadrant[DV <0 & C_mI<0] <- 1
+quadrant[DV <0 & C_mI>0] <- 2
+quadrant[DV >0 & C_mI<0] <- 3
+quadrant[localMIsale[,5]>signif] <- 0
+
+```
+
+```{r}
+map.localMIsale$quadrant <- quadrant
+colors <- c("#ffffff", "#2c7bb6", "#abd9e9", "#fdae61", "#d7191c")
+clusters <- c("insignificant", "low-low", "low-high", "high-low", "highhigh")
+
+tm_shape(map.localMIsale) +
+  tm_fill(col = "quadrant", style = "cat", palette =
+colors[c(sort(unique(quadrant)))+1], labels =
+clusters[c(sort(unique(quadrant)))+1], popup.vars = c("Postal.Code")) +
+  tm_view(set.zoom.limits = c(11,17)) +
+  tm_borders(alpha=0.5)
+```
+
+THe LISA Cluster Map shows the significant locations color coded by type of spatial autocorrelation. the blue colour shaded districts are those having low-high autocorrelation, meaning that they are negative outliers that has lower values for total transaction number than the neighbours. For the high high regions, they are centrred in near the central area. As compared to total transaction number, one district (East) that is originally in low-high quadrant is no longer low-high in this case. 
+
+#Hot Spot and Cold Spot Area Analysis 
+
+Getis and Ord's G-statistics will be used to detect spatial anomalies. 
+
+1. Computing Gi Statistics using Adaptive Distance Weight Matrix
+```{r}
+fips <- order(map$NAME_3)
+gi.adaptive <- localG(map$final_total_sale, knbsale_lw)
+map.gi <- cbind(map, as.matrix(gi.adaptive))
+names(map.gi)[22] <- "gstat_adaptive"
+```
+
+2. Visualising local Gi
+```{r}
+tm_shape(map.gi) +
+  tm_fill(col = "gstat_adaptive",
+          style = "pretty",
+          palette = "-RdBu",
+          title = "local Gi Total Sales Values") +
+tm_borders(alpha = 0.5)
+```
+
+In the choropleth map above, hot spots and cold spots are similar to that of by Total Transaction Number. Additionaly, we should note that both districts in the city centre and North East region are hot spots and has higher total sales values. 
+
+
+#(C) Total Freight Values 
+
+I. Modelling Spatial Neighbours 
+#Chloropleth Map to Show Distribution of Total Sales Values
+```{r}
+qtm(map,"final_total_freight", text="ID_3", text.size = 0.5)
+```
+
+From the exploratory data analysis using Choloropleth Map, We notice that the spatial distribution by total freight values is not random. More freight are generated in the central area of the map while the freight values decrease gradually as the distance from the centre increases. 
+
+# Adaptive Proximity Matrix
+```{r}
+coords <- coordinates(map)
+knbfreight <- knn2nb(knearneigh(coords, k=8, longlat = TRUE),
+row.names=row.names(map$final_total_freight))
+knbfreight_lw <- nb2listw(knbfreight, style = 'B')
+summary(knbfreight_lw)
+```
+As shown, the number of least connected regions and most connected regions are the same (which is the total number of districts 160). This shows that every district is equally connected with any other districts, thus reducing the unfairness in spatial clustering due to the difference in distance to neighbours. 
+
+```{r}
+plot(map, border="lightgrey")
+plot(knbfreight, coordinates(map), pch = 19, cex = 0.6, add = TRUE, col = "red")
+```
+As the spatial distribution of the districts are evenly distributed, it shows that the adpative proximity matrix is the most suitable one for this assignment. 
+
+II. COMPUTE CALCULATE THE LOCAL SPATIAL CLUSTERING STATISTICS AND TO INTERPRET THEIR ANALYSIS RESULTS 
+
+#Cluster and Outlier Analysis 
+1. Computing Local Moran's I using Adaptive Promoxity Weight Matrix
+
+```{r}
+fips <- order(map$NAME_3)
+localMIfreight <- localmoran(map$final_total_freight, knbfreight_lw)
+head(localMIfreight)
+```
+
+```{r}
+printCoefmat(data.frame(localMIfreight[fips,], row.names=map$NAME_3[fips]),
+check.names=FALSE)
+```
+
+2. Plotting Local Moran Scatterplot 
+```{r}
+nci <- moran.plot(map$final_total_freight, knbfreight_lw, labels=as.character(map$NAME_3),
+xlab="Total Freight Values", ylab="Spatially Lag Total Freight Values")
+```
+
+As shown in this scatterplot, the regions for LL, HH, LH, HL are different from those by total transaction number as well as that for total sales values. <ajority of the districts lie in the Low Low and High High quardrant.In this case, Itaim Bibi, Vila Mariana, Jabaquara, Perdizes fall in the region of HH Autocorrelation (i.e. positive cluster). However, there are some exceptions, for districts Guarulhos and Osasco (similar to total transaction number and Total Sales Vlaues), they are considered HL Autocorrelation (i.e. negative outlier), indicating that they have exceptionally higher number of transactions than the neighours. Morumbi is no longer considered in the LH AUtocorrelation region and has moved to the region of HH Autocorrelation, meaning that the total freight values for this district is as high as that for the surrounding districts despite the lower transaction number and total sales. 
+
+3. Mapping Local Moran's I
+
+```{r}
+#Append the local Moran's I dataframe onto hunan SpatialPOlygon DataFrame
+map.localMIfreight <- cbind(map,localMIfreight)
+```
+
+Mapping both local Moran's I values and P-values 
+
+```{r}
+localMIfreight.map <- tm_shape(map.localMIfreight) +
+  tm_fill(col = "Ii",
+          style = "pretty",
+          title = "local moran statistics") +
+  tm_borders(alpha = 0.5)
+
+pvalue.map <- tm_shape(map.localMIfreight) +
+  tm_fill(col = "Pr.z...0.",
+          breaks=c(-Inf, 0.001, 0.01, 0.05, 0.1, Inf),
+          palette="-Blues",
+          title = "local Moran's I p-vaiues") +
+  tm_borders(alpha = 0.5)
+
+tmap_arrange(localMIfreight.map, pvalue.map, asp=1, ncol=2)
+```
+
+For local moran statistics(left graph),For those that are considered siginicant, majority of these regions are under clusters. However, for those that are considerd outlier (orange and dark orange), none of them are statistically significant.
+
+5. Plotting LISA map 
+
+```{r}
+quadrant <- vector(mode="numeric",length=nrow(localMIfreight))
+DV <- map$final_total_freight - mean(map$final_total_freight)
+C_mI <- localMIfreight[,1] - mean(localMIfreight[,1])
+signif <- 0.05
+quadrant[DV >0 & C_mI>0] <- 4
+quadrant[DV <0 & C_mI<0] <- 1
+quadrant[DV <0 & C_mI>0] <- 2
+quadrant[DV >0 & C_mI<0] <- 3
+quadrant[localMIfreight[,5]>signif] <- 0
+
+```
+
+```{r}
+map.localMIfreight$quadrant <- quadrant
+colors <- c("#ffffff", "#2c7bb6", "#abd9e9", "#fdae61", "#d7191c")
+clusters <- c("insignificant", "low-low", "low-high", "high-low", "highhigh")
+
+tm_shape(map.localMIfreight) +
+  tm_fill(col = "quadrant", style = "cat", palette =
+colors[c(sort(unique(quadrant)))+1], labels =
+clusters[c(sort(unique(quadrant)))+1], popup.vars = c("Postal.Code")) +
+  tm_view(set.zoom.limits = c(11,17)) +
+  tm_borders(alpha=0.5)
+```
+
+The low-high districts are sames as those under Total Sales Values.However, for the high high regions, the districts changed slightly from that of Total Transaction Number and Total Sales Values. This means that Total Frieght Values generally follow that of Total Sales Values spatial distribution closely.
+
+#Hot Spot and Cold Spot Area Analysis 
+
+Getis and Ord's G-statistics will be used to detect spatial anomalies. 
+
+1. Computing Gi Statistics using Adaptive Distance Weight Matrix
+```{r}
+fips <- order(map$NAME_3)
+gi.adaptive <- localG(map$final_total_freight, knbfreight_lw)
+map.gi <- cbind(map, as.matrix(gi.adaptive))
+names(map.gi)[22] <- "gstat_adaptive"
+```
+
+2. Visualising local Gi
+```{r}
+tm_shape(map.gi) +
+  tm_fill(col = "gstat_adaptive",
+          style = "pretty",
+          palette = "-RdBu",
+          title = "local Gi Total Freight Values") +
+tm_borders(alpha = 0.5)
+```
+
+In the choropleth map above, the trend of hot spots and cold spots are similar to that of by Total Transaction Number and Total Sales Values. However, total friehgt values genrally has a lower intensity of red shade and blue shade, meaning that the hot spots and cold spots are lesser as well as less in attribute value difference than that for all previous attributes.
+
+#(D) Average Sales Values 
+
+I. Modelling Spatial Neighbours 
+#Chloropleth Map to Show Distribution of Total Sales Values
+```{r}
+qtm(map,"average_sales_per_transaction", text="ID_3", text.size = 0.5)
+```
+
+From the exploratory data analysis using Choloropleth Map, We notice that the spatial distribution by average sales is not random. However, thespatial distribution is more even than all previous attributes. In general, both districts near the center and districts away from centre have similar average sales per transaction.
+
+# Adaptive Proximity Matrix
+```{r}
+coords <- coordinates(map)
+knbsalesavg <- knn2nb(knearneigh(coords, k=8, longlat = TRUE),
+row.names=row.names(map$average_sales_per_transaction))
+knbsalesavg_lw <- nb2listw(knbsalesavg, style = 'B')
+summary(knbsalesavg_lw)
+```
+As shown, the number of least connected regions and most connected regions are the same (which is the total number of districts 160). This shows that every district is equally connected with any other districts, thus reducing the unfairness in spatial clustering due to the difference in distance to neighbours. 
+
+```{r}
+plot(map, border="lightgrey")
+plot(knbsalesavg, coordinates(map), pch = 19, cex = 0.6, add = TRUE, col = "red")
+```
+As the spatial distribution of the districts are evenly distributed, it shows that the adpative proximity matrix is the most suitable one for this assignment. 
+
+II. COMPUTE CALCULATE THE LOCAL SPATIAL CLUSTERING STATISTICS AND TO INTERPRET THEIR ANALYSIS RESULTS 
+
+#Cluster and Outlier Analysis 
+1. Computing Local Moran's I using Adaptive Promoxity Weight Matrix
+
+```{r}
+fips <- order(map$NAME_3)
+localMISalesAvg <- localmoran(map$average_sales_per_transaction, knbsalesavg_lw)
+head(localMISalesAvg)
+```
+
+```{r}
+printCoefmat(data.frame(localMISalesAvg[fips,], row.names=map$NAME_3[fips]),
+check.names=FALSE)
+```
+
+2. Plotting Local Moran Scatterplot 
+```{r}
+nci <- moran.plot(map$average_sales_per_transaction, knbsalesavg_lw, labels=as.character(map$NAME_3),
+xlab="Average Sales Values", ylab="Spatially Lag Average Sales Values")
+```
+
+As shown in this scatterplot, the regions for LL, HH, LH, HL are drastically different from all previous attributes. Majority of the districts lie in the HH and HL quardrants. Quite a number of districts has zero average sales values. For this attribute, district Se and Pari both have high average sales values which are similar the its neighbours. However, for district Jundiapeba, Santa Margarida Paulista, Iguatemi, Ouro Fino Paulista, Riacho Grande and Capuava, these districts are located at HL autocorrelation quadrant, meaning that it has much higher aveage sales valeus than the surrounding neighbours. District Rio Grande da Serra falls in the LL Autocorrelation quadrant, meaning that the region surrounding this district all has similarly low average sales values. 
+
+
+3. Mapping Local Moran's I
+
+```{r}
+#Append the local Moran's I dataframe onto hunan SpatialPOlygon DataFrame
+map.localMISalesAvg <- cbind(map,localMISalesAvg)
+```
+
+Mapping both local Moran's I values and P-values 
+
+```{r}
+localMISalesAvg.map <- tm_shape(map.localMISalesAvg) +
+  tm_fill(col = "Ii",
+          style = "pretty",
+          title = "local moran statistics") +
+  tm_borders(alpha = 0.5)
+
+pvalue.map <- tm_shape(map.localMISalesAvg) +
+  tm_fill(col = "Pr.z...0.",
+          breaks=c(-Inf, 0.001, 0.01, 0.05, 0.1, Inf),
+          palette="-Blues",
+          title = "local Moran's I p-vaiues") +
+  tm_borders(alpha = 0.5)
+
+tmap_arrange(localMISalesAvg.map, pvalue.map, asp=1, ncol=2)
+```
+
+For local moran statistics(left graph),for those that are considered siginicant, these districts are generally considered clusters. However, for those that are considerd outlier (red, orange and dark orange), almost none of them are statistically significant. This means that we should pay attention to these cluster and identify the cause. We should identify whether the contagion is true or apparent. 
+
+5. Plotting LISA map 
+
+```{r}
+quadrant <- vector(mode="numeric",length=nrow(localMISalesAvg))
+DV <- map$average_sales_per_transaction - mean(map$average_sales_per_transaction)
+C_mI <- localMISalesAvg[,1] - mean(localMISalesAvg[,1])
+signif <- 0.05
+quadrant[DV >0 & C_mI>0] <- 4
+quadrant[DV <0 & C_mI<0] <- 1
+quadrant[DV <0 & C_mI>0] <- 2
+quadrant[DV >0 & C_mI<0] <- 3
+quadrant[localMISalesAvg[,5]>signif] <- 0
+
+```
+
+```{r}
+map.localMISalesAvg$quadrant <- quadrant
+colors <- c("#ffffff", "#2c7bb6", "#abd9e9", "#fdae61", "#d7191c")
+clusters <- c("insignificant", "low-low", "low-high", "high-low", "highhigh")
+
+tm_shape(map.localMISalesAvg) +
+  tm_fill(col = "quadrant", style = "cat", palette =
+colors[c(sort(unique(quadrant)))+1], labels =
+clusters[c(sort(unique(quadrant)))+1], popup.vars = c("Postal.Code")) +
+  tm_view(set.zoom.limits = c(11,17)) +
+  tm_borders(alpha=0.5)
+```
+
+The LISA Map for this attribute is drastically different from the previous attributes. There are 6 districts that are in the low-high region which are also statistically signicant. These districts are generally near the coastal area and away from the cities. Perhaps, the standard of living and purchasing power of these districts are lower than those near them. There is only 1 district that fall in the high high region. 
+
+#Hot Spot and Cold Spot Area Analysis 
+
+Getis and Ord's G-statistics will be used to detect spatial anomalies. 
+
+1. Computing Gi Statistics using Adaptive Distance Weight Matrix
+```{r}
+fips <- order(map$NAME_3)
+gi.adaptive <- localG(map$average_sales_per_transaction, knbsalesavg_lw)
+map.gi <- cbind(map, as.matrix(gi.adaptive))
+names(map.gi)[22] <- "gstat_adaptive"
+```
+
+2. Visualising local Gi
+```{r}
+tm_shape(map.gi) +
+  tm_fill(col = "gstat_adaptive",
+          style = "pretty",
+          palette = "-RdBu",
+          title = "local Gi Average Sales Values") +
+tm_borders(alpha = 0.5)
+```
+
+In the choropleth map above, hot spots and cold spots are very different from previous attributes. The hot spot and cold spot are slightly more evenly distributed while the hot spots area still concentrated near central and north east region. (with the addition of north west region district)
+
+#(E) Average Freight Values 
+
+I. Modelling Spatial Neighbours 
+#Chloropleth Map to Show Distribution of Total Sales Values
+```{r}
+qtm(map,"average_freight_values_per_transaction", text="ID_3", text.size = 0.5)
+```
+
+From the exploratory data analysis using Choloropleth Map, 1e notice that the spatial distribution by average sales is not random. However, thespatial distribution is more even than Total_Transaction Number, Total Sales Values and Total Freight Values. The spatial distrition is largely similar to that of average sales values. In general, both districts near the center and districts away from centre have similar average sales per transaction.
+
+# Adaptive Proximity Matrix
+```{r}
+coords <- coordinates(map)
+knbfreightavg <- knn2nb(knearneigh(coords, k=8, longlat = TRUE),
+row.names=row.names(map$average_freight_values_per_transaction))
+knbfreightavg_lw <- nb2listw(knbfreightavg, style = 'B')
+summary(knbfreightavg_lw)
+```
+As shown, the number of least connected regions and most connected regions are the same (which is the total number of districts 160). This shows that every district is equally connected with any other districts, thus reducing the unfairness in spatial clustering due to the difference in distance to neighbours. 
+
+```{r}
+plot(map, border="lightgrey")
+plot(knbfreightavg, coordinates(map), pch = 19, cex = 0.6, add = TRUE, col = "red")
+```
+As the spatial distribution of the districts are evenly distributed, it shows that the adpative proximity matrix is the most suitable one for this assignment. 
+
+II. COMPUTE CALCULATE THE LOCAL SPATIAL CLUSTERING STATISTICS AND TO INTERPRET THEIR ANALYSIS RESULTS 
+
+#Cluster and Outlier Analysis 
+1. Computing Local Moran's I using Adaptive Promoxity Weight Matrix
+
+```{r}
+fips <- order(map$NAME_3)
+localMIFreightAvg <- localmoran(map$average_freight_values_per_transaction, knbfreightavg_lw)
+head(localMIFreightAvg)
+```
+
+```{r}
+printCoefmat(data.frame(localMIFreightAvg[fips,], row.names=map$NAME_3[fips]),
+check.names=FALSE)
+```
+
+2. Plotting Local Moran Scatterplot 
+```{r}
+nci <- moran.plot(map$average_freight_values_per_transaction, knbfreightavg_lw, labels=as.character(map$NAME_3),
+xlab="Average Freight Values", ylab="Spatially Lag Average Freight Values")
+```
+
+As shown in this scatterplot, the regions for LL, HH, LH, HL are very different from all previous attributes. Majority of the districts lie in the HH and HL quardrants (higher than that of Average Sales Values). Quite a number of districts has zero average sales values. For this attribute, example of district Pirapora do Bom Jesushave high average sales values which are similar the its neighbours. However, for district Ouro Fino Paulista, Iguatem, Rio Grande De Sandra, Riacho Grande and Capuava are located at HL autocorrelation quadrant, meaning that it has much higher aveage sales valeus than the surrounding neighbours. No distinct districts are observed on the LL and LH quadrant. This means that a large majority of the districts have high average frieght values, meaning that this attribute is not the most important attirbute to compare the difference among the districts.
+
+3. Mapping Local Moran's I
+
+```{r}
+#Append the local Moran's I dataframe onto hunan SpatialPOlygon DataFrame
+map.localMIFreightAvg <- cbind(map,localMIFreightAvg)
+```
+
+Mapping both local Moran's I values and P-values 
+
+```{r}
+localMIFreightAvg.map <- tm_shape(map.localMIFreightAvg) +
+  tm_fill(col = "Ii",
+          style = "pretty",
+          title = "local moran statistics") +
+  tm_borders(alpha = 0.5)
+
+pvalue.map <- tm_shape(map.localMIFreightAvg) +
+  tm_fill(col = "Pr.z...0.",
+          breaks=c(-Inf, 0.001, 0.01, 0.05, 0.1, Inf),
+          palette="-Blues",
+          title = "local Moran's I p-vaiues") +
+  tm_borders(alpha = 0.5)
+
+tmap_arrange(localMIFreightAvg.map, pvalue.map, asp=1, ncol=2)
+```
+
+For local moran statistics(left graph),for those that are considered siginicant, these districts are generally considered clusters. However, for those that are considerd outlier (red, orange and dark orange), almost none of them are statistically significant. This trend is very similar to that of Average Sales Values.  
+
+5. Plotting LISA map 
+
+```{r}
+quadrant <- vector(mode="numeric",length=nrow(localMIFreightAvg))
+DV <- map$average_freight_values_per_transaction - mean(map$average_freight_values_per_transaction)
+C_mI <- localMIFreightAvg[,1] - mean(localMIFreightAvg[,1])
+signif <- 0.05
+quadrant[DV >0 & C_mI>0] <- 4
+quadrant[DV <0 & C_mI<0] <- 1
+quadrant[DV <0 & C_mI>0] <- 2
+quadrant[DV >0 & C_mI<0] <- 3
+quadrant[localMIFreightAvg[,5]>signif] <- 0
+
+```
+
+```{r}
+map.localMIFreightAvg$quadrant <- quadrant
+colors <- c("#ffffff", "#2c7bb6", "#abd9e9", "#fdae61", "#d7191c")
+clusters <- c("insignificant", "low-low", "low-high", "high-low", "highhigh")
+
+tm_shape(map.localMIFreightAvg) +
+  tm_fill(col = "quadrant", style = "cat", palette =
+colors[c(sort(unique(quadrant)))+1], labels =
+clusters[c(sort(unique(quadrant)))+1], popup.vars = c("Postal.Code")) +
+  tm_view(set.zoom.limits = c(11,17)) +
+  tm_borders(alpha=0.5)
+```
+
+The LISA Map for this attribute is exactly similar to that of average sales per transaction. This means the spatial distribution of LH and HH Autocorrelation districts have no difference between average sales per transaction and average freight per transaction.
+
+#Hot Spot and Cold Spot Area Analysis 
+
+Getis and Ord's G-statistics will be used to detect spatial anomalies. 
+
+1. Computing Gi Statistics using Adaptive Distance Weight Matrix
+```{r}
+fips <- order(map$NAME_3)
+gi.adaptive <- localG(map$average_freight_values_per_transaction, knbfreightavg_lw)
+map.gi <- cbind(map, as.matrix(gi.adaptive))
+names(map.gi)[22] <- "gstat_adaptive"
+```
+
+2. Visualising local Gi
+```{r}
+tm_shape(map.gi) +
+  tm_fill(col = "gstat_adaptive",
+          style = "pretty",
+          palette = "-RdBu",
+          title = "local Gi Average Sales Values") +
+tm_borders(alpha = 0.5)
+
+```
+
+In the choropleth map above, hot spots and cold spots are very different from previous attributes. The hot spot and cold spot are slightly more evenly distributed while the hot spots area still concentrated near central and north east region. (with the addition of north west region district)
+
+#Conclusion:
+
+In conclusion, among all five attributes, Total Transaction Number, Average Sales Values and Total Sales Values are more important attributes that could explain the difference for the difference in purchasing power across districts. The company should pay extra attention to the clusters, hotspots and cold spots to derive better marketing and operationsal strategies to enhance the performance. In general, across all attributes, outliers are not very important as those districts that are outliers are genrally not statistically significant. 
