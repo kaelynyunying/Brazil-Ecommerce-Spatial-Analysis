@@ -7,7 +7,7 @@ Applying Spatial Clustering of Geographically Referenced Attributes to Brail Eco
 https://www.kaggle.com/olistbr/brazilian-ecommerce/home
 
 **Project Background:** 
-Olist is the largest department store in Brazilian marketplaces. Olist connects small businesses from all over Brazil to channels without hassle and with a single contract. Those merchants are able to sell their products through the Olist Store and ship them directly to the customers using Olist logistics partners. You can find more information about Olist by visiting their website: www.olist.com.
+Olist is one of the largest department store in Brazilian marketplaces. Olist connects small businesses from all over Brazil to channels without hassle and with a single contract. Those merchants are able to sell their products through the Olist Store and ship them directly to the customers using Olist logistics partners. You can find more information about Olist by visiting their website: www.olist.com.
 
 **Project Scope:** 
 This project aims to focus more on geospatial analysis techniques such as spatial clustering of geographically reference attributes techniques in particular. 
